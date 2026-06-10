@@ -1,0 +1,102 @@
+name: Aider Run
+description: Run Aider, push changes, post a summary comment, and update the PR description.
+
+inputs:
+  prompt:
+    description: Message to pass to Aider
+    required: true
+  pr_number:
+    description: PR number to comment on and update
+    required: true
+  branch:
+    description: Branch to push changes to
+    required: true
+  base_ref:
+    description: Base branch for generating the diff
+    required: true
+  commit_message:
+    description: Git commit message for the AI changes
+    required: false
+    default: "chore(ai): apply AI changes [skip ci]"
+  anthropic_api_key:
+    required: true
+  deepseek_api_key:
+    required: true
+  github_token:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Aider
+      shell: bash
+      run: pip install aider-chat
+
+    - name: Run Aider
+      shell: bash
+      env:
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek_api_key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        AIDER_PROMPT: ${{ inputs.prompt }}
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        aider --architect \
+              --model deepseek/deepseek-chat \
+              --editor-model anthropic/claude-sonnet-4-6 \
+              --yes-always \
+              --message "$AIDER_PROMPT" | tee aider-output.txt
+
+    - name: Push Changes
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        COMMIT_MSG: ${{ inputs.commit_message }}
+      run: |
+        git diff --cached --quiet && git diff --quiet || \
+          git commit -m "$COMMIT_MSG"
+        git push origin "HEAD:$BRANCH"
+
+    - name: Post Summary Comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+      run: |
+        AIDER_OUTPUT=$(tail -c 4000 aider-output.txt)
+
+        PROMPT=$(printf 'Summarise what was implemented in one short paragraph. Be direct and specific about what changed. No preamble.\n\n%s' "$AIDER_OUTPUT")
+        COMMENT=$(bash "$GITHUB_ACTION_PATH/call-llm.sh" \
+          --model claude-haiku-4-5-20251001 \
+          --max-tokens 256 \
+          --prompt "$PROMPT")
+
+        gh pr comment "$PR_NUMBER" --body "$(printf '**AI Review Bot**\n\n%s' "$COMMENT")"
+
+    - name: Update PR Description
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        BASE_REF: ${{ inputs.base_ref }}
+      run: |
+        CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body')
+        git diff "origin/$BASE_REF...HEAD" > /tmp/pr.diff
+        DIFF=$(head -c 8000 /tmp/pr.diff)
+        AIDER_SUMMARY=$(tail -c 2000 aider-output.txt)
+
+        PROMPT=$(printf 'Update this PR description to reflect the current changes. Keep it concise — one short paragraph maximum. Preserve the original intent. Return only the updated description text, no preamble.\n\nCurrent description:\n%s\n\nAI changes summary:\n%s\n\nDiff:\n%s' "$CURRENT_BODY" "$AIDER_SUMMARY" "$DIFF")
+        NEW_BODY=$(bash "$GITHUB_ACTION_PATH/call-llm.sh" \
+          --model claude-haiku-4-5-20251001 \
+          --max-tokens 1024 \
+          --prompt "$PROMPT")
+
+        gh pr edit "$PR_NUMBER" --body "$NEW_BODY"
