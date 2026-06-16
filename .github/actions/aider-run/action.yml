@@ -51,16 +51,15 @@ runs:
               --model deepseek/deepseek-chat \
               --editor-model anthropic/claude-sonnet-4-6 \
               --yes-always \
-              --message "$AIDER_PROMPT" | tee aider-output.txt
+              --message "$AIDER_PROMPT" | tee /tmp/aider-output.txt
 
     - name: Push Changes
       shell: bash
       env:
         BRANCH: ${{ inputs.branch }}
-        COMMIT_MSG: ${{ inputs.commit_message }}
       run: |
-        git diff --cached --quiet && git diff --quiet || \
-          git commit -m "$COMMIT_MSG"
+        git checkout -- .gitignore
+        git clean -fdx -- '.aider*'
         git push origin "HEAD:$BRANCH"
 
     - name: Post Summary Comment
@@ -70,7 +69,7 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         PR_NUMBER: ${{ inputs.pr_number }}
       run: |
-        AIDER_OUTPUT=$(tail -c 4000 aider-output.txt)
+        AIDER_OUTPUT=$(tail -c 4000 /tmp/aider-output.txt)
 
         PROMPT=$(printf 'Summarise what was implemented in one short paragraph. Be direct and specific about what changed. No preamble.\n\n%s' "$AIDER_OUTPUT")
         COMMENT=$(bash "$GITHUB_ACTION_PATH/call-llm.sh" \
@@ -91,7 +90,7 @@ runs:
         CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body')
         git diff "origin/$BASE_REF...HEAD" > /tmp/pr.diff
         DIFF=$(head -c 8000 /tmp/pr.diff)
-        AIDER_SUMMARY=$(tail -c 2000 aider-output.txt)
+        AIDER_SUMMARY=$(tail -c 2000 /tmp/aider-output.txt)
 
         PROMPT=$(printf 'Update this PR description to reflect the current changes. Keep it concise — one short paragraph maximum. Preserve the original intent. Return only the updated description text, no preamble.\n\nCurrent description:\n%s\n\nAI changes summary:\n%s\n\nDiff:\n%s' "$CURRENT_BODY" "$AIDER_SUMMARY" "$DIFF")
         NEW_BODY=$(bash "$GITHUB_ACTION_PATH/call-llm.sh" \
