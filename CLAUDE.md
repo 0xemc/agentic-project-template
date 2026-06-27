@@ -16,3 +16,11 @@ Make sure to collaborate with the prompter to co-design any final solution befor
 ## Architecture Templates
 
 @templates/feature-based-development.md
+
+## Git Workflow
+
+When performing git operations (commits, branching, PRs, syncing remotes), refer to docs/git-workflow.md
+
+## Code Standards
+
+When editing JSX or TSX, refer to docs/code-standards.md
